@@ -5,25 +5,32 @@ import threading
 import logging
 import numpy as np
 
-#Logging
+# Logging setup
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
 class SchoolSecuritySystem:
     def __init__(self, camera_index=0, frame_width=640, frame_height=480):
+        # Initialize camera with error checking
         self.cap = cv2.VideoCapture(camera_index, cv2.CAP_DSHOW)
+        if not self.cap.isOpened():
+            logger.error("Failed to open camera!")
+            raise RuntimeError("Could not open camera")
+
         self.cap.set(cv2.CAP_PROP_FRAME_WIDTH, frame_width)
         self.cap.set(cv2.CAP_PROP_FRAME_HEIGHT, frame_height)
-
-        _, self.start_frame = self.cap.read()
+        
+        # Read initial frame
+        ret, self.start_frame = self.cap.read()
+        if not ret:
+            logger.error("Failed to read initial frame!")
+            raise RuntimeError("Could not read from camera")
+            
         self.start_frame = self._process_frame(self.start_frame)
+        logger.info("Camera initialized successfully")
 
         self.alarm = False
-        self.alarm_mode = False
         self.alarm_counter = 0
-
-        # Load pre-trained MobileNet SSD model
-        self.net = cv2.dnn.readNetFromCaffe("C:\Work And Projects\Spotify Automation\deploy.prototxt", "C:\Work And Projects\Spotify Automation\MobileNetSSD_deploy.caffemodel")
 
         # Create a threading.Event to signal when the threads should stop
         self.stop_event = threading.Event()
@@ -38,100 +45,79 @@ class SchoolSecuritySystem:
         return frame
 
     def beep_alarm(self):
-        for _ in range(5):
-            if not self.alarm_mode:
+        while not self.stop_event.is_set():
+            if self.alarm_counter <= self.ALARM_THRESHOLD:
                 break
             logger.info("ALARM!!!!!")
             winsound.Beep(2500, 1000)
         self.alarm = False
 
-    def detect_persons(self, frame):
-        (h, w) = frame.shape[:2]
-        blob = cv2.dnn.blobFromImage(cv2.resize(frame, (300, 300)), 0.007843, (300, 300), 127.5)
-
-        # Set the input to the neural network
-        self.net.setInput(blob)
-
-        # Forward pass and get detection
-        detections = self.net.forward()
-
-        # Filter out weak detections
-        rects = []
-        for i in range(detections.shape[2]):
-            confidence = detections[0, 0, i, 2]
-            if confidence > 0.5:  # Adjust confidence threshold as needed
-                box = detections[0, 0, i, 3:7] * np.array([w, h, w, h])
-                rects.append(box.astype("int"))
-
-        return rects
-
     def run(self):
+        logger.info("Starting security system...")
         while not self.stop_event.is_set():
-            _, frame = self.cap.read()
+            ret, frame = self.cap.read()
+            if not ret:
+                logger.error("Failed to read frame from camera!")
+                break
+
             processed_frame = self._process_frame(frame)
 
-            if self.alarm_mode:
-                frame_diff = cv2.absdiff(processed_frame, self.start_frame)
-                threshold = cv2.threshold(frame_diff, self.THRESHOLD_VALUE, 255, cv2.THRESH_BINARY)[1]
-                self.start_frame = processed_frame
-
-                if threshold.sum() > self.MOTION_THRESHOLD:
-                    self.alarm_counter += 1
-                else:
-                    if self.alarm_counter > 0:
-                        self.alarm_counter -= 1
-
-                    # Detect persons and draw boxes
-                    rects = self.detect_persons(frame)
-                    for rect in rects:
-                        cv2.rectangle(frame, (rect[0], rect[1]), (rect[2], rect[3]), (0, 255, 0), 2)
-
-                cv2.imshow("School Security Cam", frame)
+            # Check for motion
+            frame_diff = cv2.absdiff(processed_frame, self.start_frame)
+            threshold = cv2.threshold(frame_diff, self.THRESHOLD_VALUE, 255, cv2.THRESH_BINARY)[1]
+            
+            # Calculate motion level for debugging
+            motion_level = threshold.sum()
+            if motion_level > self.MOTION_THRESHOLD:
+                logger.info(f"Motion detected! Level: {motion_level}")
+                self.alarm_counter += 1
             else:
-                cv2.imshow("School Security Cam", processed_frame)
+                if self.alarm_counter > 0:
+                    self.alarm_counter -= 1
+
+            # Update the reference frame
+            self.start_frame = processed_frame
+
+            # Show the original color frame
+            cv2.imshow("Security Camera", frame)
 
             if self.alarm_counter > self.ALARM_THRESHOLD:
                 if not self.alarm:
                     self.alarm = True
+                    logger.info("Triggering alarm!")
                     threading.Thread(target=self.beep_alarm).start()
 
             key_pressed = cv2.waitKey(1)
-            if key_pressed == ord("t"):
-                self.alarm_mode = not self.alarm_mode
-                self.alarm_counter = 0
-                logger.info("Alarm mode changed to: %s", self.alarm_mode)
-            elif key_pressed == ord("q"):
-                self.alarm_mode = False
-                logger.info("Exiting the school security system.")
+            if key_pressed == ord("q"):
+                logger.info("Exiting the security system.")
                 break
 
     def start(self):
-        # Start the main thread
         self.main_thread.start()
 
     def stop(self):
-        # Set the stop event to signal threads to stop
         self.stop_event.set()
-        # Wait for the main thread to finish
         self.main_thread.join()
-
-        # Release resources
         self.cap.release()
         cv2.destroyAllWindows()
 
 if __name__ == "__main__":
-    # Constants
+    # Constants - Adjusted for better sensitivity
     SchoolSecuritySystem.THRESHOLD_VALUE = 25
-    SchoolSecuritySystem.MOTION_THRESHOLD = 300
-    SchoolSecuritySystem.ALARM_THRESHOLD = 20
-
-    security_system = SchoolSecuritySystem(camera_index=0, frame_width=640, frame_height=480)
-    security_system.start()
+    SchoolSecuritySystem.MOTION_THRESHOLD = 1000  # Lowered threshold for more sensitivity
+    SchoolSecuritySystem.ALARM_THRESHOLD = 5      # Lowered threshold for faster alarm
 
     try:
+        security_system = SchoolSecuritySystem(camera_index=0, frame_width=640, frame_height=480)
+        security_system.start()
+
         # Keep the main thread running until KeyboardInterrupt is received
         while True:
             pass
+    except Exception as e:
+        logger.error(f"An error occurred: {str(e)}")
     except KeyboardInterrupt:
-        # Stop the system when KeyboardInterrupt (Ctrl+C) is received
-        security_system.stop()
+        logger.info("Received keyboard interrupt, shutting down...")
+    finally:
+        if 'security_system' in locals():
+            security_system.stop()
