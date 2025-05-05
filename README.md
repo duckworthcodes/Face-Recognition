@@ -79,8 +79,6 @@ The system can be configured by modifying the following constants in `refresh.py
 ## Contributing
 Feel free to submit issues and enhancement requests!
 
-## License
-[Add your chosen license here]
-
 ## Author
-[Your Name] 
+[Vaibhav Verma] 
+
